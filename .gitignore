@@ -1,0 +1,19 @@
+# Credentials — never commit
+secrets.h
+tools/.env
+tools/tokens.json
+
+# Arduino build output
+build/
+*.bin
+*.elf
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
