@@ -1,8 +1,8 @@
 /*
  * now-playing-clip
  *
- * Shows the currently playing Spotify track on a LILYGO T-Display-S3,
- * scrolling the title and artist across the screen.
+ * Shows the currently playing Spotify track on a LILYGO T-Display-S3:
+ * album art on the left, title and artist scrolling on the right.
  *
  * See README.md for Spotify app registration and refresh token setup.
  */
@@ -12,6 +12,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <TFT_eSPI.h>
+#include <TJpg_Decoder.h>
 
 #include "secrets.h"
 
@@ -21,17 +22,29 @@
 #define PIN_LCD_BL   38   // backlight
 
 TFT_eSPI tft;
-TFT_eSprite spr = TFT_eSprite(&tft);
 
 static const int SCREEN_W = 320;
 static const int SCREEN_H = 170;
 
+// Layout: album art on the left, a scrolling text band on the right.
+// The two regions never overlap, so the art is drawn once directly to the
+// display and only the text band is redrawn every frame.
+static const int ART_X   = 8;
+static const int ART_Y   = 10;
+static const int ART_SZ  = 150;    // 300px art decoded at 1:2
+
+static const int TEXT_X  = 168;
+static const int TEXT_W  = SCREEN_W - TEXT_X;   // 152
+static const int TEXT_H  = SCREEN_H;
+
+TFT_eSprite spr = TFT_eSprite(&tft);
+
 // ---------------------------------------------------------------- timing
 
-static const unsigned long POLL_INTERVAL_MS  = 4000;        // ask Spotify
-static const unsigned long TOKEN_LIFETIME_MS = 50UL * 60000; // refresh early
+static const unsigned long POLL_INTERVAL_MS  = 4000;
+static const unsigned long TOKEN_LIFETIME_MS = 50UL * 60000;
 static const int           SCROLL_DELAY_MS   = 16;
-static const int           GAP_PX            = 60;           // between copies
+static const int           GAP_PX            = 40;
 
 unsigned long lastPoll  = 0;
 unsigned long tokenTime = 0;
@@ -41,17 +54,18 @@ unsigned long lastStep  = 0;
 
 String accessToken = "";
 String nowLine     = "nothing playing";
+String artUrl      = "";      // currently displayed art, to avoid refetching
 bool   isPlaying   = false;
-int    scrollX     = SCREEN_W;
+int    scrollX     = TEXT_W;
 
 // ---------------------------------------------------------------- prototypes
 
-// Arduino's auto-prototype generator misses functions taking a reference,
-// so declare these explicitly.
 void setLine(const String &line, bool playing);
 bool refreshAccessToken();
 void pollNowPlaying();
 void drawFrame();
+void loadArt(const String &url);
+void clearArt();
 
 // ---------------------------------------------------------------- wifi
 
@@ -79,10 +93,9 @@ void connectWiFi() {
 
 // ---------------------------------------------------------------- spotify
 
-// Trade the long-lived refresh token for a short-lived access token.
 bool refreshAccessToken() {
   WiFiClientSecure client;
-  client.setInsecure();          // see README note on TLS
+  client.setInsecure();
 
   HTTPClient http;
   if (!http.begin(client, "https://accounts.spotify.com/api/token")) {
@@ -120,7 +133,6 @@ bool refreshAccessToken() {
   return accessToken.length() > 0;
 }
 
-// Ask Spotify what's playing. Updates nowLine / isPlaying.
 void pollNowPlaying() {
   if (accessToken.isEmpty()) return;
 
@@ -134,10 +146,10 @@ void pollNowPlaying() {
   http.addHeader("Authorization", String("Bearer ") + accessToken);
   int code = http.GET();
 
-  // 204 = nothing playing, and an empty body. Not an error.
-  if (code == 204) {
+  if (code == 204) {                 // nothing playing, empty body
     http.end();
     setLine("nothing playing", false);
+    clearArt();
     return;
   }
 
@@ -154,11 +166,13 @@ void pollNowPlaying() {
     return;
   }
 
-  // Only pull out the two fields we need — the full response is large.
+  // Pull out only what we need. The full response is large.
   JsonDocument filter;
   filter["is_playing"] = true;
   filter["item"]["name"] = true;
   filter["item"]["artists"][0]["name"] = true;
+  filter["item"]["album"]["images"][0]["url"]   = true;
+  filter["item"]["album"]["images"][0]["width"] = true;
 
   JsonDocument doc;
   DeserializationError err =
@@ -177,10 +191,104 @@ void pollNowPlaying() {
 
   if (strlen(title) == 0) {
     setLine("nothing playing", false);
+    clearArt();
     return;
   }
 
   setLine(String(title) + "  \u2014  " + artist, playing);
+
+  // Spotify returns several sizes (usually 640, 300, 64). Pick the one
+  // closest to 300 — decoded at 1:2 that lands near our 150px box.
+  JsonArray images = doc["item"]["album"]["images"];
+  String best;
+  int bestDelta = 99999;
+  for (JsonObject img : images) {
+    int w = img["width"] | 0;
+    const char *u = img["url"] | "";
+    if (w == 0 || strlen(u) == 0) continue;
+    int delta = abs(w - 300);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = u;
+    }
+  }
+
+  if (best.length() && best != artUrl) {
+    loadArt(best);
+  }
+}
+
+// ---------------------------------------------------------------- album art
+
+// TJpg_Decoder hands back decoded blocks; push them straight to the display.
+bool jpgOutput(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
+  if (y >= tft.height()) return false;
+  tft.pushImage(x, y, w, h, bitmap);
+  return true;
+}
+
+void clearArt() {
+  if (artUrl.isEmpty()) return;
+  artUrl = "";
+  tft.fillRect(ART_X, ART_Y, ART_SZ, ART_SZ, TFT_BLACK);
+}
+
+void loadArt(const String &url) {
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  if (!http.begin(client, url)) {
+    Serial.println("art: begin failed");
+    return;
+  }
+
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("art: HTTP %d\n", code);
+    http.end();
+    return;
+  }
+
+  int len = http.getSize();
+  if (len <= 0 || len > 200000) {      // sanity bound
+    Serial.printf("art: bad length %d\n", len);
+    http.end();
+    return;
+  }
+
+  // Album art is 20-60kB. Prefer PSRAM so we never squeeze the heap.
+  uint8_t *buf = (uint8_t *)ps_malloc(len);
+  if (!buf) buf = (uint8_t *)malloc(len);
+  if (!buf) {
+    Serial.println("art: out of memory");
+    http.end();
+    return;
+  }
+
+  int got = http.getStream().readBytes(buf, len);
+  http.end();
+
+  if (got != len) {
+    Serial.printf("art: short read %d/%d\n", got, len);
+    free(buf);
+    return;
+  }
+
+  TJpgDec.setJpgScale(2);              // 300px source -> 150px on screen
+  TJpgDec.setSwapBytes(true);
+  TJpgDec.setCallback(jpgOutput);
+
+  tft.fillRect(ART_X, ART_Y, ART_SZ, ART_SZ, TFT_BLACK);
+  JRESULT res = TJpgDec.drawJpg(ART_X, ART_Y, buf, len);
+  free(buf);
+
+  if (res == JDR_OK) {
+    artUrl = url;
+    Serial.println("art: drawn");
+  } else {
+    Serial.printf("art: decode failed (%d)\n", res);
+  }
 }
 
 // ---------------------------------------------------------------- display
@@ -191,15 +299,15 @@ void setLine(const String &line, bool playing) {
   isPlaying = playing;
   if (line != nowLine) {
     nowLine = line;
-    scrollX = SCREEN_W;
+    scrollX = TEXT_W;
     Serial.print("now: ");
     Serial.println(nowLine);
   }
 }
 
 void drawFrame() {
-  uint16_t bg = isPlaying ? TFT_BLACK : 0x18E3;   // dim grey when idle
-  uint16_t fg = isPlaying ? TFT_GREEN : TFT_DARKGREY;
+  uint16_t bg = TFT_BLACK;
+  uint16_t fg = isPlaying ? TFT_WHITE : TFT_DARKGREY;
 
   spr.fillSprite(bg);
   spr.setTextColor(fg, bg);
@@ -207,10 +315,10 @@ void drawFrame() {
 
   int w = spr.textWidth(nowLine);
 
-  spr.drawString(nowLine, scrollX, 70);
-  spr.drawString(nowLine, scrollX + w + GAP_PX, 70);   // second copy = loop
+  spr.drawString(nowLine, scrollX, 72);
+  spr.drawString(nowLine, scrollX + w + GAP_PX, 72);   // second copy = loop
 
-  spr.pushSprite(0, 0);
+  spr.pushSprite(TEXT_X, 0);
 
   if (--scrollX < -(w + GAP_PX)) scrollX = 0;
 }
@@ -232,7 +340,7 @@ void setup() {
   tft.setRotation(1);              // landscape, 320x170
   tft.fillScreen(TFT_BLACK);
 
-  spr.createSprite(SCREEN_W, SCREEN_H);
+  spr.createSprite(TEXT_W, TEXT_H);
 
   connectWiFi();
   refreshAccessToken();
@@ -255,7 +363,7 @@ void loop() {
 
   if (now - lastPoll > POLL_INTERVAL_MS) {
     lastPoll = now;
-    pollNowPlaying();              // blocks ~200-500ms; scroll will hitch
+    pollNowPlaying();              // blocks; scroll hitches briefly
   }
 
   if (now - lastStep >= SCROLL_DELAY_MS) {

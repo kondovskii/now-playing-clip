@@ -57,6 +57,7 @@ Install:
 - **esp32** boards package by Espressif (Boards Manager)
 - **ArduinoJson** by Benoit Blanchon (Library Manager)
 - **TFT_eSPI** by Bodmer (Library Manager)
+- **TJpg_Decoder** by Bodmer (Library Manager) — for album art
 
 TFT_eSPI needs the T-Display-S3 pin configuration, which is not in the stock
 library. Get it from LILYGO's `T-Display-S3` repo on GitHub and follow their
@@ -83,6 +84,18 @@ seconds. If all three appear, the hard part is done.
 
 ---
 
+## Layout
+
+Album art sits in a 150x150 box on the left; the title and artist scroll in a
+band on the right. The two regions never overlap, so the art is drawn once
+when the track changes and only the text band is redrawn each frame.
+
+Spotify returns several art sizes (usually 640, 300 and 64 px). The sketch
+picks whichever is closest to 300 and decodes it at 1:2, landing at 150 px.
+
+To resize the art, change `ART_SZ` and `TEXT_X` together — `TEXT_W` is derived
+from `TEXT_X`, so the sprite follows automatically.
+
 ## Gotchas
 
 - **GPIO15 must be driven HIGH** or the screen stays black when running on
@@ -91,6 +104,10 @@ seconds. If all three appear, the hard part is done.
 - **Nothing playing** returns HTTP 204 with an empty body, not an error.
 - **Private sessions** return nothing. If the screen says idle while music is
   playing, check that.
+- **Album art download blocks for a second or two** on each track change,
+  while the scroll sits still. Expected. Moving the HTTP work to the second
+  core with FreeRTOS is the proper fix, once the simple version works.
+- Art is only refetched when the image URL changes, not on every poll.
 - `setInsecure()` skips TLS certificate verification. Fine for a hobby build on
   your own network; swap in a root CA if you ever care.
 
