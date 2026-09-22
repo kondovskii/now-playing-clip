@@ -50,7 +50,19 @@ It will:
 
 Copy that output into `firmware/now-playing-clip/secrets.h`.
 
-## Step 3 — Arduino IDE setup
+## Step 3 — Check it works before you touch hardware
+
+```bash
+cd tools
+python test_now_playing.py
+```
+
+Play something in Spotify. It refreshes the token, polls the same endpoint
+the firmware uses, and prints the track plus the album art sizes. If this
+works, every part of the Spotify integration is proven and anything that
+goes wrong later is display code.
+
+## Step 4 — Arduino IDE setup
 
 Install:
 
@@ -76,7 +88,7 @@ Board settings that matter:
 `USB CDC On Boot: Enabled` is the one people miss. Without it you get no
 serial output and no way to see what's wrong.
 
-## Step 4 — Flash and watch serial
+## Step 5 — Flash and watch serial
 
 Open the Serial Monitor at 115200 before you worry about the screen. In order
 you should see: WiFi connected, token refreshed, then a track title every few
@@ -116,7 +128,8 @@ from `TEXT_X`, so the sprite follows automatically.
 ```
 now-playing-clip/
 ├── tools/
-│   └── get_refresh_token.py    run once on your laptop
+│   ├── get_refresh_token.py    run once on your laptop
+│   └── test_now_playing.py     verify, no hardware needed
 └── firmware/
     └── now-playing-clip/
         ├── now-playing-clip.ino
