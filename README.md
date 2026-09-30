@@ -78,7 +78,7 @@ goes wrong later is display code.
 
 ## Step 4 — Arduino IDE setup
 
-Install
+Install:
 
 - **esp32** boards package by Espressif (Boards Manager)
 - **ArduinoJson** by Benoit Blanchon (Library Manager)
