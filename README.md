@@ -78,12 +78,13 @@ goes wrong later is display code.
 
 ## Step 4 — Arduino IDE setup
 
-Install:
+Install
 
 - **esp32** boards package by Espressif (Boards Manager)
 - **ArduinoJson** by Benoit Blanchon (Library Manager)
 - **TFT_eSPI** by Bodmer (Library Manager)
 - **TJpg_Decoder** by Bodmer (Library Manager) — for album art
+
 
 TFT_eSPI needs the T-Display-S3 pin configuration, which ships with the
 library but isn't enabled. Open
