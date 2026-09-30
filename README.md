@@ -4,6 +4,20 @@ A wearable hair clip that shows whatever is currently playing on Spotify.
 
 Hardware: LILYGO T-Display-S3 (ESP32-S3, 1.9" 170x320 ST7789) + 3.7V LiPo.
 
+## Status
+
+| Piece | State |
+|---|---|
+| Spotify auth + API | verified against live account |
+| Firmware | compiles clean, **never run on hardware** |
+| Album art | written, decode untested on device |
+| Hardware | boards in transit |
+
+Untested and most likely to need work on first flash: display
+orientation and colour order, whether the art decodes and lands in the
+right box, and the sprite/text layout. Watch serial before worrying
+about the screen.
+
 ## How it works
 
 1. You authorise the app **once**, in a browser on your laptop, using
@@ -71,9 +85,17 @@ Install:
 - **TFT_eSPI** by Bodmer (Library Manager)
 - **TJpg_Decoder** by Bodmer (Library Manager) — for album art
 
-TFT_eSPI needs the T-Display-S3 pin configuration, which is not in the stock
-library. Get it from LILYGO's `T-Display-S3` repo on GitHub and follow their
-instructions for copying their setup files into your `TFT_eSPI` library folder.
+TFT_eSPI needs the T-Display-S3 pin configuration, which ships with the
+library but isn't enabled. Open
+`Documents/Arduino/libraries/TFT_eSPI/User_Setup_Select.h`, comment out
+`#include <User_Setup.h>`, and uncomment
+`#include <User_Setups/Setup206_LilyGo_T_Display_S3.h>`. Restart the IDE.
+
+If Arduino ever offers to update TFT_eSPI, decline — upgrading overwrites
+that file and you get a clean upload with a blank screen.
+
+Take **ArduinoJson 7.x**. The sketch uses bare `JsonDocument`, which is v7
+syntax; on v6 every JSON block fails to compile.
 
 Board settings that matter:
 
