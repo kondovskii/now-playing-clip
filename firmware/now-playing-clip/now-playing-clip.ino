@@ -53,14 +53,19 @@ unsigned long lastStep  = 0;
 // ---------------------------------------------------------------- state
 
 String accessToken = "";
-String nowLine     = "nothing playing";
+String titleLine   = "nothing playing";
+String artistLine  = "";
+int    scrollT     = TEXT_W;
+int    scrollA     = TEXT_W;
 String artUrl      = "";      // currently displayed art, to avoid refetching
 bool   isPlaying   = false;
-int    scrollX     = TEXT_W;
+long          progressMs = 0;
+long          durationMs = 0;
+unsigned long progressAt = 0;   // millis() when progressMs was received
 
 // ---------------------------------------------------------------- prototypes
 
-void setLine(const String &line, bool playing);
+void setLine(const String &t, const String &a, bool playing);
 bool refreshAccessToken();
 void pollNowPlaying();
 void drawFrame();
@@ -148,7 +153,7 @@ void pollNowPlaying() {
 
   if (code == 204) {                 // nothing playing, empty body
     http.end();
-    setLine("nothing playing", false);
+    setLine("nothing playing", "", false);
     clearArt();
     return;
   }
@@ -173,6 +178,8 @@ void pollNowPlaying() {
   filter["item"]["artists"][0]["name"] = true;
   filter["item"]["album"]["images"][0]["url"]   = true;
   filter["item"]["album"]["images"][0]["width"] = true;
+  filter["progress_ms"] = true;
+  filter["item"]["duration_ms"] = true;
 
   JsonDocument doc;
   DeserializationError err =
@@ -190,13 +197,15 @@ void pollNowPlaying() {
   const char *artist = doc["item"]["artists"][0]["name"] | "";
 
   if (strlen(title) == 0) {
-    setLine("nothing playing", false);
+    setLine("nothing playing", "", false);
     clearArt();
     return;
   }
 
-  setLine(String(title) + "  \u2014  " + artist, playing);
-
+  setLine(String(title), String(artist), playing);
+  progressMs = doc["progress_ms"] | 0;
+  durationMs = doc["item"]["duration_ms"] | 0;
+  progressAt = millis();
   // Spotify returns several sizes (usually 640, 300, 64). Pick the one
   // closest to 300 — decoded at 1:2 that lands near our 150px box.
   JsonArray images = doc["item"]["album"]["images"];
@@ -266,11 +275,25 @@ void loadArt(const String &url) {
     return;
   }
 
-  int got = http.getStream().readBytes(buf, len);
+  WiFiClient *stream = http.getStreamPtr();
+  int got = 0;
+  unsigned long lastData = millis();
+
+  while (got < len && millis() - lastData < 5000) {
+    size_t avail = stream->available();
+    if (avail) {
+      int n = stream->readBytes(buf + got, min(avail, (size_t)(len - got)));
+      got += n;
+      lastData = millis();
+    } else {
+      delay(1);
+    }
+  }
   http.end();
 
   if (got != len) {
     Serial.printf("art: short read %d/%d\n", got, len);
+    artUrl = url;          // don't retry a URL that won't download
     free(buf);
     return;
   }
@@ -287,6 +310,7 @@ void loadArt(const String &url) {
     artUrl = url;
     Serial.println("art: drawn");
   } else {
+    artUrl = url;          // don't retry a URL that won't decode
     Serial.printf("art: decode failed (%d)\n", res);
   }
 }
@@ -295,32 +319,55 @@ void loadArt(const String &url) {
 
 // Only reset the scroll position when the text actually changes, so the
 // marquee doesn't jump every time we poll.
-void setLine(const String &line, bool playing) {
+void setLine(const String &t, const String &a, bool playing) {
   isPlaying = playing;
-  if (line != nowLine) {
-    nowLine = line;
-    scrollX = TEXT_W;
-    Serial.print("now: ");
-    Serial.println(nowLine);
+  if (t != titleLine || a != artistLine) {
+    titleLine  = t;
+    artistLine = a;
+    scrollT = scrollA = TEXT_W;
+    Serial.printf("now: %s - %s\n", t.c_str(), a.c_str());
   }
 }
 
 void drawFrame() {
-  uint16_t bg = TFT_BLACK;
-  uint16_t fg = isPlaying ? TFT_WHITE : TFT_DARKGREY;
-
-  spr.fillSprite(bg);
-  spr.setTextColor(fg, bg);
+  spr.fillSprite(TFT_BLACK);
   spr.setTextFont(4);
+  spr.setTextDatum(TL_DATUM);
 
-  int w = spr.textWidth(nowLine);
+  // Title
+  spr.setTextColor(isPlaying ? TFT_WHITE : TFT_DARKGREY, TFT_BLACK);
+  int wt = spr.textWidth(titleLine);
+  if (wt <= TEXT_W) {
+    spr.drawString(titleLine, (TEXT_W - wt) / 2, 52);
+  } else {
+    spr.drawString(titleLine, scrollT, 52);
+    spr.drawString(titleLine, scrollT + wt + GAP_PX, 52);
+    if (--scrollT < -(wt + GAP_PX)) scrollT += wt + GAP_PX;
+  }
 
-  spr.drawString(nowLine, scrollX, 72);
-  spr.drawString(nowLine, scrollX + w + GAP_PX, 72);   // second copy = loop
+  // Artist
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  int wa = spr.textWidth(artistLine);
+  if (wa <= TEXT_W) {
+    spr.drawString(artistLine, (TEXT_W - wa) / 2, 92);
+  } else {
+    spr.drawString(artistLine, scrollA, 92);
+    spr.drawString(artistLine, scrollA + wa + GAP_PX, 92);
+    if (--scrollA < -(wa + GAP_PX)) scrollA += wa + GAP_PX;
+  }
+  // Progress bar
+  if (durationMs > 0) {
+    long p = progressMs;
+    if (isPlaying) p += (long)(millis() - progressAt);   // smooth between polls
+    if (p > durationMs) p = durationMs;
 
+    int barY = 140, barH = 4;
+    int filled = (int)((long long)p * TEXT_W / durationMs);
+
+    spr.fillRect(0, barY, TEXT_W, barH, 0x2104);       // unplayed track
+    spr.fillRect(0, barY, filled, barH, TFT_WHITE);    // played
+  }
   spr.pushSprite(TEXT_X, 0);
-
-  if (--scrollX < -(w + GAP_PX)) scrollX = 0;
 }
 
 // ---------------------------------------------------------------- setup
