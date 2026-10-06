@@ -6,17 +6,12 @@ Hardware: LILYGO T-Display-S3 (ESP32-S3, 1.9" 170x320 ST7789) + 3.7V LiPo.
 
 ## Status
 
-| Piece | State |
-|---|---|
-| Spotify auth + API | verified against live account |
-| Firmware | compiles clean, **never run on hardware** |
-| Album art | written, decode untested on device |
-| Hardware | boards in transit |
+Running on hardware. Track title, artist, album art and progress bar all
+working. Battery untested — no cells yet.
 
-Untested and most likely to need work on first flash: display
-orientation and colour order, whether the art decodes and lands in the
-right box, and the sprite/text layout. Watch serial before worrying
-about the screen.
+Known rough edge: the HTTP poll and art download block the render loop, so
+the scroll hitches on each poll and a track change takes a few seconds to
+appear. Moving the network work to the second core with FreeRTOS is the fix.
 
 ## How it works
 
@@ -121,9 +116,18 @@ seconds. If all three appear, the hard part is done.
 
 ## Layout
 
-Album art sits in a 150x150 box on the left; the title and artist scroll in a
-band on the right. The two regions never overlap, so the art is drawn once
-when the track changes and only the text band is redrawn each frame.
+Album art sits in a 150x150 box on the left. On the right, the track title
+sits above the artist, with a progress bar beneath them. The two regions
+never overlap, so the art is drawn once when the track changes and only the
+text band is redrawn each frame.
+
+Each line scrolls only if it's too wide for the band; short titles sit
+centred and still. Title and artist scroll independently, so they drift
+apart rather than moving in lockstep.
+
+The progress bar extrapolates between polls — it adds the time elapsed since
+the last `progress_ms` reading, so it moves smoothly instead of jumping every
+four seconds, and snaps back to truth on the next poll.
 
 Spotify returns several art sizes (usually 640, 300 and 64 px). The sketch
 picks whichever is closest to 300 and decodes it at 1:2, landing at 150 px.
@@ -142,7 +146,13 @@ from `TEXT_X`, so the sprite follows automatically.
 - **Album art download blocks for a second or two** on each track change,
   while the scroll sits still. Expected. Moving the HTTP work to the second
   core with FreeRTOS is the proper fix, once the simple version works.
-- Art is only refetched when the image URL changes, not on every poll.
+- Arduino's `Stream::readBytes()` returns as soon as the socket stalls, not
+  when it has all the bytes you asked for. Over TLS that reliably truncated a
+  ~25kB art download to about 16kB. Loop on `available()` until you have the
+  full content-length, with a stall timeout.
+- A failed art fetch sets `artUrl` anyway, so a URL that won't download or
+  decode isn't retried every poll. Without that, the display locks up
+  re-downloading the same broken image forever.
 - `setInsecure()` skips TLS certificate verification. Fine for a hobby build on
   your own network; swap in a root CA if you ever care.
 
