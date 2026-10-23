@@ -8,6 +8,8 @@
  */
 
 #include <WiFi.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -20,6 +22,7 @@
 
 #define PIN_POWER_ON 15   // MUST be HIGH or the screen is black on battery
 #define PIN_LCD_BL   38   // backlight
+#define BTN_BOOT      0   // active LOW
 
 TFT_eSPI tft;
 
@@ -71,6 +74,7 @@ void pollNowPlaying();
 void drawFrame();
 void loadArt(const String &url);
 void clearArt();
+void goToSleep();
 
 // ---------------------------------------------------------------- wifi
 
@@ -355,20 +359,46 @@ void drawFrame() {
     spr.drawString(artistLine, scrollA + wa + GAP_PX, 92);
     if (--scrollA < -(wa + GAP_PX)) scrollA += wa + GAP_PX;
   }
-  // Progress bar
+    // Progress bar
   if (durationMs > 0) {
     long p = progressMs;
     if (isPlaying) p += (long)(millis() - progressAt);   // smooth between polls
     if (p > durationMs) p = durationMs;
 
-    int barY = 140, barH = 4;
+    int barY = 140, barH = 4, r = 4;
     int filled = (int)((long long)p * TEXT_W / durationMs);
 
     spr.fillRect(0, barY, TEXT_W, barH, 0x2104);       // unplayed track
     spr.fillRect(0, barY, filled, barH, TFT_WHITE);    // played
+
+    // Playhead. Clamped so it never gets clipped at either end.
+    int cx = filled;
+    if (cx < r)          cx = r;
+    if (cx > TEXT_W - r) cx = TEXT_W - r;
+    spr.fillCircle(cx, barY + barH / 2, r, TFT_WHITE);
   }
+
   spr.pushSprite(TEXT_X, 0);
 }
+
+void goToSleep() {
+  Serial.println("sleeping");
+  delay(50);
+  tft.fillScreen(TFT_BLACK);
+  digitalWrite(PIN_LCD_BL, LOW);
+  digitalWrite(PIN_POWER_ON, LOW);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+
+  while (digitalRead(BTN_BOOT) == LOW) delay(10);   // wait for release
+  delay(100);
+
+  rtc_gpio_pullup_en(GPIO_NUM_0);
+  rtc_gpio_pulldown_dis(GPIO_NUM_0);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
+  esp_deep_sleep_start();
+}
+
 
 // ---------------------------------------------------------------- setup
 
@@ -378,6 +408,8 @@ void setup() {
 
   pinMode(PIN_LCD_BL, OUTPUT);
   digitalWrite(PIN_LCD_BL, HIGH);
+
+  pinMode(BTN_BOOT, INPUT_PULLUP);
 
   Serial.begin(115200);
   delay(300);
@@ -398,6 +430,14 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
+
+    static unsigned long btnDownAt = 0;
+  if (digitalRead(BTN_BOOT) == LOW) {
+    if (btnDownAt == 0) btnDownAt = millis();
+    else if (millis() - btnDownAt > 2000) goToSleep();
+  } else {
+    btnDownAt = 0;
+  }
 
   if (WiFi.status() != WL_CONNECTED) {
     connectWiFi();
