@@ -132,8 +132,7 @@ four seconds, and snaps back to truth on the next poll.
 Spotify returns several art sizes (usually 640, 300 and 64 px). The sketch
 picks whichever is closest to 300 and decodes it at 1:2, landing at 150 px.
 
-To resize the art, change `ART_SZ` and `TEXT_X` together — `TEXT_W` is derived
-from `TEXT_X`, so the sprite follows automatically.
+To resize the art, change `ART_SZ` and `TEXT_X` together — `TEXT_W` is derived from `TEXT_X`, so the sprite follows automatically.
 
 ## Gotchas
 
