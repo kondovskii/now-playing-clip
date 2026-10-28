@@ -114,6 +114,7 @@ seconds. If all three appear, the hard part is done.
 
 ---
 
+
 ## Layout
 
 Album art sits in a 150x150 box on the left. On the right, the track title
